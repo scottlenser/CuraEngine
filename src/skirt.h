@@ -14,8 +14,9 @@ namespace cura
  * \param distance The distance of the first outset from the parts at the first layer
  * \param count Number of outsets / brim lines
  * \param minLength The minimum length the skirt should have (enforced by taking more outsets)
+ * \param outside_only Whether to not put a skirt inside holes in the first layer
  */
-void generateSkirt(SliceDataStorage& storage, int distance, int count, int minLength);
+void generateSkirt(SliceDataStorage& storage, int distance, int count, int minLength, bool outside_only);
 
 }//namespace cura
 

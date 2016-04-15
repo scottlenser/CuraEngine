@@ -7,7 +7,7 @@
 namespace cura 
 {
 
-void generateSkirt(SliceDataStorage& storage, int distance, int count, int minLength)
+void generateSkirt(SliceDataStorage& storage, int distance, int count, int minLength, bool outside_only)
 {
     if (count == 0) return;
     
@@ -21,6 +21,15 @@ void generateSkirt(SliceDataStorage& storage, int distance, int count, int minLe
     bool get_convex_hull = count == 1 && distance > 0;
     
     Polygons first_layer_outline = storage.getLayerOutlines(0, true, externalOnly);
+    if (outside_only)
+    {
+        std::vector<PolygonsPart> parts = first_layer_outline.splitIntoParts();
+        first_layer_outline.clear();
+        for (PolygonsPart& part : parts)
+        {
+            first_layer_outline.add(part[0]);
+        }
+    }
     
     std::vector<Polygons> skirts;
     for(int skirtNr=0; skirtNr<count;skirtNr++)
