@@ -98,7 +98,7 @@ int SlicerLayer::getNextSegmentIdx(const Mesh* mesh, const SlicerSegment& segmen
     else
     {
         // segment ended at vertex
-        
+
         for (int face_to_try : faces_to_try)
         {
             int result_segment_idx =
@@ -210,14 +210,14 @@ void SlicerLayer::connectOpenPolylinesImpl(Polygons& open_polylines, coord_t max
                 return val.polyline_end;
             }
         };
-        
+
         SparseGrid<StitchGridVal,StitchGridValPointAccess> grid(cell_size);
 
         // populate grid
         for(unsigned int polyline_0_idx = 0; polyline_0_idx < open_polylines.size(); polyline_0_idx++)
         {
             PolygonRef polyline_0 = open_polylines[polyline_0_idx];
-            
+
             if (polyline_0.size() < 1) continue;
 
             StitchGridVal grid_val;
@@ -258,7 +258,7 @@ void SlicerLayer::connectOpenPolylinesImpl(Polygons& open_polylines, coord_t max
                     {
                         continue;
                     }
-                    
+
                     Point diff = nearby_end.polyline_end - polyline_1.back();
                     int64_t dist2 = vSize2(diff);
                     if (dist2 < max_dist2)
@@ -327,10 +327,9 @@ void SlicerLayer::connectOpenPolylinesImpl(Polygons& open_polylines, coord_t max
                 terminus_old_to_cur_map[old_terms[idx]] = INVALID_TERMINUS;
                 terminus_cur_to_old_map[cur_terms[idx]] = INVALID_TERMINUS;
             }
-            //std::cout << "finished polygon " << best_polyline_0_idx << std::endl;
             continue;
         }
-        
+
         // plan how to append polygons
         bool back_0 = (terminus_0_idx & 1) == 1;
         bool back_1 = (terminus_1_idx & 1) == 1;
@@ -623,17 +622,11 @@ ClosePolygonResult SlicerLayer::findPolygonPointClosestTo(Point input)
 
 void SlicerLayer::makePolygons(const Mesh* mesh, bool keep_none_closed, bool extensive_stitching)
 {
-    TimeKeeper part_timer;
-    
     Polygons open_polylines;
     
     makeBasicPolygonLoops(mesh, open_polylines);
-    std::cout << "makeBasicPolygonLoops took " << part_timer.restart() << std::endl;
-    std::cout << "polygons.size()=" << polygons.size() <<
-        " open_polylines.size()=" << open_polylines.size() << std::endl;
     
     connectOpenPolylines(open_polylines);
-    std::cout << "connectOpenPolylines took " << part_timer.restart() << std::endl;
     
     // TODO: (?) for mesh surface mode: connect open polygons. Maybe the above algorithm can create two open polygons which are actually connected when the starting segment is in the middle between the two open polygons.
 
@@ -641,7 +634,6 @@ void SlicerLayer::makePolygons(const Mesh* mesh, bool keep_none_closed, bool ext
     { // don't stitch when using (any) mesh surface mode, i.e. also don't stitch when using mixed mesh surface and closed polygons, because then polylines which are supposed to be open will be closed
         stitch(open_polylines);
     }
-    std::cout << "stitch took " << part_timer.restart() << std::endl;
     
     if (extensive_stitching)
     {
@@ -678,7 +670,6 @@ void SlicerLayer::makePolygons(const Mesh* mesh, bool keep_none_closed, bool ext
     {
         polygons = polygons.offset(xy_offset);
     }
-    std::cout << "makePolygons rest took " << part_timer.restart() << std::endl;
 }
 
 
@@ -688,7 +679,7 @@ Slicer::Slicer(const Mesh* mesh, int initial, int thickness, int layer_count, bo
     assert(layer_count > 0);
 
     TimeKeeper slice_timer;
-    
+
     layers.resize(layer_count);
     
     for(int32_t layer_nr = 0; layer_nr < layer_count; layer_nr++)
@@ -779,12 +770,12 @@ Slicer::Slicer(const Mesh* mesh, int initial, int thickness, int layer_count, bo
             layers[layer_nr].segments.push_back(s);
         }
     }
-    std::cout << "slice of mesh took " << slice_timer.restart() << std::endl;
+    log("slice of mesh took %.3f seconds\n",slice_timer.restart());
     for(unsigned int layer_nr=0; layer_nr<layers.size(); layer_nr++)
     {
         layers[layer_nr].makePolygons(mesh, keep_none_closed, extensive_stitching);
     }
-    std::cout << "slice make polygons took " << slice_timer.restart() << std::endl;
+    log("slice make polygons took %.3f seconds\n",slice_timer.restart());
 }
 
 }//namespace cura

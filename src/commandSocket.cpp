@@ -169,7 +169,6 @@ void CommandSocket::connect(const std::string& ip, int port)
             }
         }
         */
-        
 
         /*
          * handle a message which consists purely of an ObjectList
@@ -384,8 +383,8 @@ void CommandSocket::sendPrintTimeMaterialEstimates()
     auto message = std::make_shared<cura::proto::PrintTimeMaterialEstimates>();
 
     message->set_time(FffProcessor::getInstance()->getTotalPrintTime());
-    unsigned int num_extruders = FffProcessor::getInstance()->getSettingAsCount("machine_extruder_count");
-    for (unsigned int extruder_nr (0); extruder_nr < num_extruders; ++extruder_nr)
+    int num_extruders = FffProcessor::getInstance()->getSettingAsCount("machine_extruder_count");
+    for (int extruder_nr (0); extruder_nr < num_extruders; ++extruder_nr)
     {
         cura::proto::MaterialEstimates* material_message = message->add_materialestimates();
 
