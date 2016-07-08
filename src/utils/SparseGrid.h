@@ -5,39 +5,44 @@
 
 #include "intpoint.h"
 
+#include <cassert>
 #include <unordered_map>
 #include <vector>
 
 namespace cura {
 
-/*! \brief Sparse grid which can locate spatially nearby values efficiently.
+/*! \brief Sparse grid which can locate spatially nearby elements efficiently.
  *
- * \tparam Val The value type to store.
- * \tparam PointAccess The functor to get the location from Val.  PointAccess
- *    must have: Point operator()(const Val &val) const
+ * \tparam ElemT The element type to store.
+ * \tparam PointAccess The functor to get the location from ElemT.  PointAccess
+ *    must have: Point operator()(const ElemT &elem) const
  *    which returns the location associated with val.
  */
-template<class Val, class PointAccess>
-class SparseGrid
+template<class ElemT, class PointAccess>
+class SparseGridInvasive
 {
 public:
+    using Elem = ElemT;
+
     /*! \brief Constructs a sparse grid with the specified cell size.
      *
      * \param[in] cell_size The size to use for a cell (square) in the grid.
      *    Typical values would be around 0.5-2x of expected query radius.
+     * \param[in] elem_reserve Number of elements to research space for.
+     * \param[in] max_load_factor Maximum average load factor before rehashing.
      */
-    SparseGrid(coord_t cell_size);
+    SparseGridInvasive(coord_t cell_size, size_t elem_reserve=0U, float max_load_factor=1.0f);
 
-    /*! \brief Inserts val into the sparse grid.
+    /*! \brief Inserts elem into the sparse grid.
      *
-     * \param[in] val The value to be inserted.
+     * \param[in] elem The element to be inserted.
      */
-    void insert(const Val &val);
+    void insert(const Elem &elem);
 
     /*! \brief Returns all data within radius of query_pt.
      *
-     * Finds all values with location within radius of \p query_pt.  May
-     * return additional values that are beyond radius.
+     * Finds all elements with location within radius of \p query_pt.  May
+     * return additional elements that are beyond radius.
      *
      * Average running time is a*(1 + 2 * radius / cell_size)**2 +
      * b*cnt where a and b are proportionality constance and cnt is
@@ -47,35 +52,56 @@ public:
      *
      * \param[in] query_pt The point to search around.
      * \param[in] radius The search radius.
-     * \return Vector of values found
+     * \return Vector of elements found
      */
-    std::vector<Val> getNearby(const Point &query_pt, coord_t radius) const;
+    std::vector<Elem> getNearby(const Point &query_pt, coord_t radius) const;
 
-private:
-    using GridPoint = Point;
-    using GridMap = std::unordered_multimap<GridPoint, Val>;
+    static const std::function<bool(const Elem&)> no_precondition;
 
-    /*! \brief Add values from the cell indicated by \p grid_pt.
+    /*!
+     * Find the nearest element to a given \p query_pt within \p radius.
      *
-     * \param[in] grid_pt The grid coordinates of the cell.
-     * \param[out] ret The values in the cell are appended to ret.
+     * \param[in] query_pt The point for which to find the nearest object.
+     * \param[in] radius The search radius.
+     * \param[out] elem_nearest the nearest element. Only valid if function returns true.
+     * \param[in] precondition A precondition which must return true for an element
+     *    to be considered for output
+     * \return True if and only if an object has been found within the radius.
      */
-    void addFromCell(const GridPoint &grid_pt,
-                     std::vector<Val> &ret) const;
+    bool getNearest(const Point &query_pt, coord_t radius, Elem &elem_nearest,
+                    const std::function<bool(const Elem& elem)> precondition = no_precondition) const;
 
-    /*! \brief Add values from cells that might contain sought after points.
+    /*! \brief Process elements from cells that might contain sought after points.
      *
-     * Appends values from cell that might have values within \p
-     * radius of \p query_pt.  Appends all values that are within
-     * radius of query_pt.  May append values that are up to radius +
+     * Processes elements from cell that might have elements within \p
+     * radius of \p query_pt.  Processes all elements that are within
+     * radius of query_pt.  May process elements that are up to radius +
      * cell_size from query_pt.
      *
      * \param[in] query_pt The point to search around.
-     * \param[in] radisu The search radius.
-     * \param[out] ret The values in the cell are appended to ret.
+     * \param[in] radius The search radius.
+     * \param[in] process_func Processes each element.  process_func(elem) is
+     *    called for each element in the cell.
      */
-    void addNearby(const Point &query_pt, coord_t radius,
-                   std::vector<Val> &ret) const;
+    template<class ProcessFunc>
+    void processNearby(const Point &query_pt, coord_t radius,
+                       ProcessFunc &process_func) const;
+
+    coord_t getCellSize() const;
+
+private:
+    using GridPoint = Point;
+    using GridMap = std::unordered_multimap<GridPoint, Elem>;
+
+    /*! \brief Process elements from the cell indicated by \p grid_pt.
+     *
+     * \param[in] grid_pt The grid coordinates of the cell.
+     * \param[in] process_func Processes each element.  process_func(elem) is
+     *    called for each element in the cell.
+     */
+    template<class ProcessFunc>
+    void processFromCell(const GridPoint &grid_pt,
+                         ProcessFunc &process_func) const;
 
     /*! \brief Compute the grid coordinates of a point.
      *
@@ -84,25 +110,108 @@ private:
      */
     GridPoint toGridPoint(const Point &point) const;
 
-    /*! \brief Map from grid locations (GridPoint) to values (Val). */
+    /*! \brief Map from grid locations (GridPoint) to elements (Elem). */
     GridMap m_grid;
-    /*! \brief Accessor for getting locations from values. */
+    /*! \brief Accessor for getting locations from elements. */
     PointAccess m_point_access;
     /*! \brief The cell (square) size. */
     coord_t m_cell_size;
 };
 
-#define SG_TEMPLATE template<class Val, class PointAccess>
-#define SG_THIS SparseGrid<Val, PointAccess>
+namespace SparseGridImpl {
 
-SG_TEMPLATE
-SG_THIS::SparseGrid(coord_t cell_size)
+template<class Val>
+struct SparseGridElem
 {
+    SparseGridElem()
+    {
+    }
+
+    SparseGridElem(const Point &point_, const Val &val_) :
+        point(point_),
+        val(val_)
+    {
+    }
+
+    Point point;
+    Val val;
+};
+
+template<class T>
+struct PointAccessor
+{
+    Point operator()(const SparseGridElem<T> &elem)
+    {
+        return elem.point;
+    }
+};
+
+} // namespace SparseGridImpl
+
+/*! \brief Sparse grid which can locate spatially nearby values efficiently.
+ *
+ * \tparam Val The value type to store.
+ */
+template<class Val>
+class SparseGrid : public SparseGridInvasive<SparseGridImpl::SparseGridElem<Val>,
+                                             SparseGridImpl::PointAccessor<Val> >
+{
+public:
+    using Base = SparseGridInvasive<SparseGridImpl::SparseGridElem<Val>,
+                                    SparseGridImpl::PointAccessor<Val> >;
+
+    /*! \brief Constructs a sparse grid with the specified cell size.
+     *
+     * \param[in] cell_size The size to use for a cell (square) in the grid.
+     *    Typical values would be around 0.5-2x of expected query radius.
+     * \param[in] elem_reserve Number of elements to research space for.
+     * \param[in] max_load_factor Maximum average load factor before rehashing.
+     */
+    SparseGrid(coord_t cell_size, size_t elem_reserve=0U, float max_load_factor=1.0f);
+
+    /*! \brief Inserts an element with specified point and value into the sparse grid.
+     *
+     * This is a convenience wrapper over \ref SparseGridInvasive::insert()
+     *
+     * \param[in] point The location for the element.
+     * \param[in] val The value for the element.
+     */
+    void insert(const Point &point, const Val &val);
+
+    /*! \brief Returns all values within radius of query_pt.
+     *
+     * Finds all values with location within radius of \p query_pt.  May
+     * return additional values that are beyond radius.
+     *
+     * See \ref getNearby().
+     *
+     * \param[in] query_pt The point to search around.
+     * \param[in] radius The search radius.
+     * \return Vector of values found
+     */
+    std::vector<Val> getNearbyVals(const Point &query_pt, coord_t radius) const;
+
+};
+
+#define SGI_TEMPLATE template<class ElemT, class PointAccess>
+#define SGI_THIS SparseGridInvasive<ElemT, PointAccess>
+
+SGI_TEMPLATE
+SGI_THIS::SparseGridInvasive(coord_t cell_size, size_t elem_reserve, float max_load_factor)
+{
+    assert(cell_size > 0U);
+
     m_cell_size = cell_size;
+
+    // Must be before the reserve call.
+    m_grid.max_load_factor(max_load_factor);
+    if (elem_reserve!=0U) {
+        m_grid.reserve(elem_reserve);
+    }
 }
 
-SG_TEMPLATE
-typename SG_THIS::GridPoint SG_THIS::toGridPoint(const Point &point)  const
+SGI_TEMPLATE
+typename SGI_THIS::GridPoint SGI_THIS::toGridPoint(const Point &point)  const
 {
     // This mapping via truncation results in the cells with
     // GridPoint.x==0 being twice as large and similarly for
@@ -113,30 +222,33 @@ typename SG_THIS::GridPoint SG_THIS::toGridPoint(const Point &point)  const
     return point / m_cell_size;
 }
 
-SG_TEMPLATE
-void SG_THIS::insert(const Val &val)
+SGI_TEMPLATE
+void SGI_THIS::insert(const Elem &elem)
 {
-    Point loc = m_point_access(val);
+    Point loc = m_point_access(elem);
     GridPoint grid_loc = toGridPoint(loc);
 
-    m_grid.emplace(grid_loc,val);
+    m_grid.emplace(grid_loc,elem);
 }
 
-SG_TEMPLATE
-void SG_THIS::addFromCell(const GridPoint &grid_pt,
-                          std::vector<Val> &ret) const
+SGI_TEMPLATE
+template<class ProcessFunc>
+void SGI_THIS::processFromCell(
+    const GridPoint &grid_pt,
+    ProcessFunc &process_func) const
 {
     auto grid_range = m_grid.equal_range(grid_pt);
     for (auto iter=grid_range.first; iter!=grid_range.second; ++iter)
     {
-        ret.push_back(iter->second);
+        process_func(iter->second);
     }
 
 }
 
-SG_TEMPLATE
-void SG_THIS::addNearby(const Point &query_pt, coord_t radius,
-                        std::vector<Val> &ret) const
+SGI_TEMPLATE
+template<class ProcessFunc>
+void SGI_THIS::processNearby(const Point &query_pt, coord_t radius,
+                             ProcessFunc &process_func) const
 {
     Point min_loc(query_pt.X-radius, query_pt.Y-radius);
     Point max_loc(query_pt.X+radius, query_pt.Y+radius);
@@ -149,18 +261,96 @@ void SG_THIS::addNearby(const Point &query_pt, coord_t radius,
         for (coord_t grid_x=min_grid.X; grid_x<=max_grid.X; ++grid_x)
         {
             GridPoint grid_pt(grid_x,grid_y);
-            addFromCell(grid_pt, ret);
+            processFromCell(grid_pt, process_func);
         }
     }
 }
 
-SG_TEMPLATE
-std::vector<Val> SG_THIS::getNearby(const Point &query_pt, coord_t radius) const
+SGI_TEMPLATE
+std::vector<typename SGI_THIS::Elem>
+SGI_THIS::getNearby(const Point &query_pt, coord_t radius) const
 {
-    std::vector<Val> ret;
-    addNearby(query_pt, radius, ret);
+    std::vector<Elem> ret;
+    auto process_func = [&ret](const Elem &elem)
+        {
+            ret.push_back(elem);
+        };
+    processNearby(query_pt, radius, process_func);
     return ret;
 }
+
+SGI_TEMPLATE
+const std::function<bool(const typename SGI_THIS::Elem &)>
+    SGI_THIS::no_precondition =
+    [](const typename SGI_THIS::Elem &)
+    {
+        return true;
+    };
+
+SGI_TEMPLATE
+bool SGI_THIS::getNearest(
+    const Point &query_pt, coord_t radius, Elem &elem_nearest,
+    const std::function<bool(const Elem& elem)> precondition) const
+{
+    bool found = false;
+    int64_t best_dist2 = static_cast<int64_t>(radius) * radius;
+    auto process_func =
+        [&query_pt,&elem_nearest,&found,&best_dist2,&precondition](const Elem &elem)
+        {
+            if (!precondition(elem))
+            {
+                return;
+            }
+            int64_t dist2 = vSize2(elem.point - query_pt);
+            if (dist2 < best_dist2)
+            {
+                found = true;
+                elem_nearest = elem;
+                best_dist2 = dist2;
+            }
+        };
+    processNearby(query_pt, radius, process_func);
+    return found;
+}
+
+SGI_TEMPLATE
+coord_t SGI_THIS::getCellSize() const
+{
+    return m_cell_size;
+}
+
+#undef SGI_TEMPLATE
+#undef SGI_THIS
+
+#define SG_TEMPLATE template<class Val>
+#define SG_THIS SparseGrid<Val>
+
+SG_TEMPLATE
+SG_THIS::SparseGrid(coord_t cell_size, size_t elem_reserve, float max_load_factor) :
+    Base(cell_size,elem_reserve,max_load_factor)
+{
+}
+
+SG_TEMPLATE
+void SG_THIS::insert(const Point &point, const Val &val)
+{
+    typename SG_THIS::Elem elem(point,val);
+    Base::insert(elem);
+}
+
+SG_TEMPLATE
+std::vector<Val>
+SG_THIS::getNearbyVals(const Point &query_pt, coord_t radius) const
+{
+    std::vector<Val> ret;
+    auto process_func = [&ret](const typename SG_THIS::Elem &elem)
+        {
+            ret.push_back(elem.val);
+        };
+    this->processNearby(query_pt, radius, process_func);
+    return ret;
+}
+
 
 #undef SG_TEMPLATE
 #undef SG_THIS
